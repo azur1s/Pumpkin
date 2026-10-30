@@ -354,13 +354,51 @@ impl DataComponentImpl for CustomModelDataImpl {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct TooltipDisplayImpl;
+pub struct TooltipDisplayImpl {
+    pub hide_tooltip: bool,
+    /// Components whose tooltip lines are hidden, in order and without duplicates.
+    pub hidden_components: Cow<'static, [crate::data_component::DataComponent]>,
+}
 impl TooltipDisplayImpl {
-    pub const fn read_data(_data: &NbtTag) -> Option<Self> {
-        Some(Self)
+    pub const DEFAULT: Self = Self {
+        hide_tooltip: false,
+        hidden_components: Cow::Borrowed(&[]),
+    };
+
+    pub fn read_data(data: &NbtTag) -> Option<Self> {
+        let compound = data.extract_compound()?;
+        let mut hidden_components = Vec::new();
+        for tag in compound.get_list("hidden_components").unwrap_or_default() {
+            let component =
+                crate::data_component::DataComponent::try_from_name(tag.extract_string()?)?;
+            if !hidden_components.contains(&component) {
+                hidden_components.push(component);
+            }
+        }
+        Some(Self {
+            hide_tooltip: compound.get_bool("hide_tooltip").unwrap_or(false),
+            hidden_components: Cow::Owned(hidden_components),
+        })
     }
 }
 impl DataComponentImpl for TooltipDisplayImpl {
+    fn write_data(&self) -> NbtTag {
+        // Like vanilla, fields at their default are left out.
+        let mut compound = NbtCompound::new();
+        if self.hide_tooltip {
+            compound.put_bool("hide_tooltip", true);
+        }
+        if !self.hidden_components.is_empty() {
+            compound.put_list(
+                "hidden_components",
+                self.hidden_components
+                    .iter()
+                    .map(|c| NbtTag::String(c.to_name().into()))
+                    .collect(),
+            );
+        }
+        NbtTag::Compound(compound)
+    }
     default_impl!(TooltipDisplay);
 }
 

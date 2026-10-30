@@ -1857,17 +1857,34 @@ impl DataComponentCodec<Self> for CustomModelDataImpl {
 
 impl DataComponentCodec<Self> for TooltipDisplayImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        seq.write_bool(false)?;
-        seq.write_var_int(&VarInt(0))
+        seq.write_bool(self.hide_tooltip)?;
+        seq.write_var_int(&VarInt(self.hidden_components.len() as i32))?;
+        for component in self.hidden_components.iter() {
+            seq.write_var_int(&VarInt(i32::from(component.to_id())))?;
+        }
+        Ok(())
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let _hide_tooltip = seq.get_bool()?;
-        let len = seq.get_var_int()?.0 as usize;
+        const MAX_HIDDEN_COMPONENTS: usize = 256;
+        let hide_tooltip = seq.get_bool()?;
+        let len = read_count(seq, MAX_HIDDEN_COMPONENTS)?;
+        let mut hidden_components = Vec::with_capacity(len);
         for _ in 0..len {
-            let _comp_id = seq.get_var_int()?;
+            let id = seq.get_var_int()?.0;
+            let component = u8::try_from(id)
+                .ok()
+                .and_then(DataComponent::try_from_id)
+                .ok_or_else(|| ReadingError::Message(format!("unknown data component id {id}")))?;
+            // Vanilla reads these into a set.
+            if !hidden_components.contains(&component) {
+                hidden_components.push(component);
+            }
         }
-        Ok(Self)
+        Ok(Self {
+            hide_tooltip,
+            hidden_components: Cow::Owned(hidden_components),
+        })
     }
 }
 
@@ -3570,6 +3587,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tooltip_display_keeps_hidden_components() {
+        // hide_tooltip, count, then network ids (attribute_modifiers = 16, lore = 11).
+        let bytes = [0, 2, 16, 11];
+        let display = TooltipDisplayImpl {
+            hide_tooltip: false,
+            hidden_components: Cow::Borrowed(&[
+                DataComponent::AttributeModifiers,
+                DataComponent::Lore,
+            ]),
+        };
+        let mut encoded = Vec::new();
+        display.serialize(&mut encoded).unwrap();
+        assert_eq!(encoded, bytes);
+        assert_eq!(
+            TooltipDisplayImpl::deserialize(&mut bytes.as_slice()).unwrap(),
+            display
+        );
+        assert!(TooltipDisplayImpl::deserialize(&mut [0, 1, 0xFF, 0x01].as_slice()).is_err());
     }
 
     #[test]
